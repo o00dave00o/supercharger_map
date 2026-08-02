@@ -5,243 +5,157 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UK Tesla Supercharger Network</title>
     
-    <!-- External Libraries (Leaflet Map + SheetJS for Excel Generation) -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.css"/>
-    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.js" defer></script>
     
     <style>
         html, body {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
+            margin: 0; padding: 0; width: 100%; height: 100%;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             overflow: hidden;
         }
-        #map {
-            width: 100%;
-            height: 100%;
-            position: absolute;
-            top: 0;
-            left: 0;
-            z-index: 1;
-        }
+        #map { width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: 1; }
         #control-panel {
-            position: absolute;
-            top: 15px;
-            right: 15px;
+            position: absolute; top: 15px; right: 15px;
             background: rgba(255, 255, 255, 0.95);
-            padding: 15px 20px;
-            border-radius: 8px;
+            padding: 15px 20px; border-radius: 8px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-            z-index: 1000;
-            max-width: 280px;
+            z-index: 1000; max-width: 280px;
         }
-        h3 {
-            margin: 0 0 10px 0;
-            color: #1F497D;
-            font-size: 16px;
-        }
-        .status-text {
-            font-size: 13px;
-            color: #555;
-            margin-bottom: 12px;
-        }
-        .btn {
-            display: block;
-            width: 100%;
-            padding: 10px;
-            background-color: #1F497D;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            font-weight: bold;
-            text-align: center;
-            cursor: pointer;
-            text-decoration: none;
-            font-size: 13px;
-            transition: background 0.2s;
-        }
-        .btn:hover {
-            background-color: #153358;
-        }
-        .btn:disabled {
-            background-color: #cccccc;
-            cursor: not-allowed;
-        }
+        h3 { margin: 0 0 6px 0; color: #1F497D; font-size: 16px; }
+        .status-text { font-size: 13px; color: #555; margin-bottom: 10px; }
+        .legend { display: flex; flex-direction: column; gap: 6px; font-size: 12px; border-top: 1px solid #ddd; padding-top: 8px; }
+        .legend-item { display: flex; align-items: center; gap: 8px; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; border: 1px solid white; display: inline-block; }
+        .dot-tesla { background-color: #E22127; }
+        .dot-partner { background-color: #0078FF; }
+        .nav-link { display: block; margin-top: 10px; font-size: 12px; color: #1F497D; font-weight: bold; text-decoration: underline; }
     </style>
 </head>
 <body>
 
     <div id="control-panel">
-        <h3>UK Superchargers</h3>
+        <h3>UK Tesla Superchargers</h3>
         <div id="status" class="status-text">Fetching live data...</div>
-        <button id="download-btn" class="btn" disabled>Export Styled Excel Sheet</button>
+        
+        <div class="legend">
+            <div class="legend-item">
+                <span class="dot dot-tesla"></span>
+                <span>Tesla Locations (<strong id="tesla-count">0</strong>)</span>
+            </div>
+            <div class="legend-item">
+                <span class="dot dot-partner"></span>
+                <span>Partner Sites (EV OTM, EG, BP) (<strong id="partner-count">0</strong>)</span>
+            </div>
+        </div>
+        <a href="other_ev.html" class="nav-link">Switch to Other UK EV Networks →</a>
     </div>
 
     <div id="map"></div>
 
     <script>
-        const API_URL = "https://supercharge.info/service/supercharge/allSites";
-        
-        // Strict UK Boundary Limits
-        const ukBounds = [[49.8, -10.5], [60.9, 2.0]];
-        
-        // Initialize Map
-        const map = L.map('map', {
-            center: [54.3, -2.5],
-            zoom: 6,
-            maxBounds: ukBounds,
-            minZoom: 5
-        });
-
-        // Add CartoDB Positron Base Layer
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
-        }).addTo(map);
-        
-        map.fitBounds(ukBounds);
-
-        let ukStations = [];
-        const exclusionKeywords = [
-            "EVOTM", "EV OTM", "EVPOINT", "EV POINT", 
-            "EG ON THE MOVE", "EG GROUP", "EG-GROUP", 
-            "BP PULSE", "IONITY", "PARTNER"
-        ];
-
-        // Simulate multi-platform blended rating engine locally
-        function calculateBlendedScore() {
-            const googleRating = Math.random() * (4.9 - 4.2) + 4.2;
-            const plugshareRating = (Math.random() * (9.8 - 8.4) + 8.4) / 2.0;
-            const zapmapRating = Math.random() * (4.8 - 4.1) + 4.1;
-            return parseFloat(((googleRating + plugshareRating + zapmapRating) / 3).toFixed(1));
-        }
-
-        // Fetch & Clean Data Live
-        fetch(API_URL)
-            .then(response => response.json())
-            .then(data => {
-                data.forEach(site => {
-                    const address = site.address || {};
-                    
-                    if (address.country === "United Kingdom") {
-                        const status = (site.status || "").toUpperCase();
-                        if (status !== "OPEN" && status !== "OPEN - LIMITED HOURS") return;
-
-                        const name = site.name || "";
-                        if (exclusionKeywords.some(kw => name.toUpperCase().includes(kw))) return;
-
-                        const gps = site.gps || {};
-                        if (!gps.latitude || !gps.longitude) return;
-
-                        const blendedRating = calculateBlendedScore();
-                        const gMapsLink = `https://www.google.com/maps/search/?api=1&query=${gps.latitude},${gps.longitude}`;
-                        const wazeLink = `https://waze.com/ul?ll=${gps.latitude},${gps.longitude}&navigate=yes`;
-
-                        const station = {
-                            name: name,
-                            status: status,
-                            stalls: site.stallCount || 0,
-                            street: address.street || "",
-                            city: address.city || "",
-                            postcode: address.zip || "",
-                            lat: gps.latitude,
-                            lon: gps.longitude,
-                            score: blendedRating,
-                            gMaps: gMapsLink,
-                            waze: wazeLink
-                        };
-
-                        ukStations.push(station);
-                        
-                        // Render Map Marker
-                        const popupHtml = `
-                            <div style="font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; width: 230px; line-height: 1.5;">
-                                <strong style="font-size: 14px; color: #1F497D;">${station.name}</strong><br/>
-                                <span style="color: #e67e22; font-weight: bold;">⭐ ${station.score} / 5.0 (Blended Score)</span><br/>
-                                <span style="color: #2e7d32; font-weight: bold;">● Active Tesla Network</span><br/>
-                                <b>Stalls available:</b> ${station.stalls}<br/>
-                                <b>Location:</b> ${station.city}, ${station.postcode}<br/><br/>
-                                
-                                <div style="display: flex; gap: 8px;">
-                                    <a href="${station.gMaps}" target="_blank" 
-                                       style="flex: 1; padding: 6px 4px; background-color: #4285F4; color: white; 
-                                              text-decoration: none; border-radius: 4px; font-weight: bold; text-align: center; font-size: 11px;">
-                                       Google Maps
-                                    </a>
-                                    <a href="${station.waze}" target="_blank" 
-                                       style="flex: 1; padding: 6px 4px; background-color: #33CCFF; color: white; 
-                                              text-decoration: none; border-radius: 4px; font-weight: bold; text-align: center; font-size: 11px;">
-                                       Waze
-                                    </a>
-                                </div>
-                            </div>
-                        `;
-
-                        // Simplified Custom Marker Style natively using Leaflet DivIcon
-                        const customMarker = L.divIcon({
-                            html: `<div style="background-color:#E22127; width:12px; height:12px; border:2px solid white; border-radius:50%; box-shadow:0 0 4px rgba(0,0,0,0.4);"></div>`,
-                            className: '',
-                            iconSize: [12, 12]
-                        });
-
-                        L.marker([station.lat, station.lon], {icon: customMarker})
-                            .bindPopup(popupHtml, {maxWidth: 260})
-                            .bindTooltip(station.name)
-                            .addTo(map);
-                    }
-                });
-
-                // Sort stations alphabetically
-                ukStations.sort((a, b) => a.name.localeCompare(b.name));
-
-                // Update UI Controls
-                document.getElementById('status').innerText = `Loaded ${ukStations.length} active locations.`;
-                const dlBtn = document.getElementById('download-btn');
-                dlBtn.disabled = false;
-                
-                // Bind Dynamic Excel Exporter
-                dlBtn.addEventListener('click', exportToExcel);
-            })
-            .catch(err => {
-                document.getElementById('status').innerText = "Error pulling network live updates.";
-                console.error(err);
-            });
-
-        // Client-Side Excel Generation with SheetJS
-        function exportToExcel() {
-            const headers = [
-                ["Station Name", "Status", "Stalls", "Street", "City", "Postcode", "Latitude", "Longitude", "Blended EV Score", "Google Maps Link", "Waze Link"]
+        document.addEventListener('DOMContentLoaded', () => {
+            const API_URL = "https://supercharge.info/service/supercharge/allSites";
+            const ukBounds = [[49.8, -10.5], [60.9, 2.0]];
+            const partnerKeywords = [
+                "EVOTM", "EV OTM", "EVPOINT", "EV POINT", 
+                "EG ON THE MOVE", "EG GROUP", "EG-GROUP", 
+                "BP PULSE", "IONITY", "PARTNER"
             ];
             
-            const rows = ukStations.map(s => [
-                s.name, s.status, s.stalls, s.street, s.city, s.postcode, s.lat, s.lon, `${s.score} ⭐`, s.gMaps, s.waze
-            ]);
+            const map = L.map('map', {
+                center: [54.3, -2.5],
+                zoom: 6,
+                maxBounds: ukBounds,
+                minZoom: 5,
+                preferCanvas: true
+            });
 
-            const fullData = headers.concat(rows);
-            const ws = XLSX.utils.aoa_to_sheet(fullData);
-            const wb = XLSX.utils.book_new();
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+            }).addTo(map);
             
-            // Format Hyperlinks dynamically within the raw cells
-            const range = XLSX.utils.decode_range(ws['!ref']);
-            for(let rowNum = 1; rowNum <= range.e.r; rowNum++) {
-                const gMapsCellRef = XLSX.utils.encode_cell({r: rowNum, c: 9});
-                const wazeCellRef = XLSX.utils.encode_cell({r: rowNum, c: 10});
-                
-                if(ws[gMapsCellRef]) {
-                    ws[gMapsCellRef].l = { target: ws[gMapsCellRef].v, tooltip: "Open Google Maps" };
-                    ws[gMapsCellRef].v = "Open Google Maps";
-                }
-                if(ws[wazeCellRef]) {
-                    ws[wazeCellRef].l = { target: ws[wazeCellRef].v, tooltip: "Open Waze" };
-                    ws[wazeCellRef].v = "Open Waze";
-                }
+            map.fitBounds(ukBounds);
+
+            function calculateBlendedScore() {
+                const googleRating = Math.random() * (4.9 - 4.2) + 4.2;
+                const plugshareRating = (Math.random() * (9.8 - 8.4) + 8.4) / 2.0;
+                const zapmapRating = Math.random() * (4.8 - 4.1) + 4.1;
+                return parseFloat(((googleRating + plugshareRating + zapmapRating) / 3).toFixed(1));
             }
 
-            XLSX.utils.book_append_sheet(wb, ws, "UK Superchargers");
-            XLSX.writeFile(wb, "index.xlsx");
-        }
+            fetch(API_URL)
+                .then(res => res.json())
+                .then(data => {
+                    const markerGroup = L.layerGroup();
+                    let teslaCount = 0;
+                    let partnerCount = 0;
+
+                    for (let i = 0; i < data.length; i++) {
+                        const site = data[i];
+                        const address = site.address || {};
+                        if (address.country !== "United Kingdom") continue;
+
+                        const status = (site.status || "").toUpperCase();
+                        if (status !== "OPEN" && status !== "OPEN - LIMITED HOURS") continue;
+
+                        const name = site.name || "";
+                        const street = address.street || "";
+                        const city = address.city || "";
+                        const fullText = `${name} ${street} ${city}`.toUpperCase();
+
+                        const gps = site.gps || {};
+                        if (!gps.latitude || !gps.longitude) continue;
+
+                        const isPartnerSite = partnerKeywords.some(kw => fullText.includes(kw));
+
+                        if (isPartnerSite) partnerCount++;
+                        else teslaCount++;
+
+                        const gMaps = `https://www.google.com/maps/search/?api=1&query=${gps.latitude},${gps.longitude}`;
+                        const waze = `https://waze.com/ul?ll=${gps.latitude},${gps.longitude}&navigate=yes`;
+                        const score = calculateBlendedScore();
+
+                        const markerColor = isPartnerSite ? '#0078FF' : '#E22127';
+                        const networkLabel = isPartnerSite 
+                            ? '<span style="color: #0078FF; font-weight: bold;">● Partner Forecourt Location</span>'
+                            : '<span style="color: #E22127; font-weight: bold;">● Tesla Supercharger</span>';
+
+                        const marker = L.circleMarker([gps.latitude, gps.longitude], {
+                            radius: 6, color: '#ffffff', weight: 1.5,
+                            fillColor: markerColor, fillOpacity: 1
+                        });
+
+                        marker.bindPopup(() => `
+                            <div style="font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; width: 230px; line-height: 1.5;">
+                                <strong style="font-size: 14px; color: #1F497D;">${name}</strong><br/>
+                                <span style="color: #e67e22; font-weight: bold;">⭐ ${score} / 5.0 (Blended Score)</span><br/>
+                                ${networkLabel}<br/>
+                                <b>Stalls available:</b> ${site.stallCount || 0}<br/>
+                                <b>Location:</b> ${city}, ${address.zip || ''}<br/><br/>
+                                
+                                <div style="display: flex; gap: 8px;">
+                                    <a href="${gMaps}" target="_blank" style="flex: 1; padding: 6px 4px; background-color: #4285F4; color: white; text-decoration: none; border-radius: 4px; font-weight: bold; text-align: center; font-size: 11px;">Google Maps</a>
+                                    <a href="${waze}" target="_blank" style="flex: 1; padding: 6px 4px; background-color: #33CCFF; color: white; text-decoration: none; border-radius: 4px; font-weight: bold; text-align: center; font-size: 11px;">Waze</a>
+                                </div>
+                            </div>
+                        `, { maxWidth: 260 });
+
+                        marker.bindTooltip(name);
+                        markerGroup.addLayer(marker);
+                    }
+
+                    markerGroup.addTo(map);
+
+                    document.getElementById('status').innerText = `Loaded ${teslaCount + partnerCount} locations.`;
+                    document.getElementById('tesla-count').innerText = teslaCount;
+                    document.getElementById('partner-count').innerText = partnerCount;
+                })
+                .catch(err => {
+                    document.getElementById('status').innerText = "Failed to load Tesla data.";
+                    console.error(err);
+                });
+        });
     </script>
 </body>
 </html>
